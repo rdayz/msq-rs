@@ -11,13 +11,13 @@
 //! [dependencies]
 //! msq = { git = "https://github.com/nullsystem/msq-rs.git" }
 //! ```
-//! 
+//!
 //! To get started using msq, see the [Quick Start](#quick-start) section below.
-//! 
+//!
 //! ## Features
 //! By default, both async [`MSQClient`] and non-async/blocking [`MSQClientBlock`] are included.
 //! However, if you want to include either only async or only non-async, you could do the following:
-//! 
+//!
 //! * For async/[`MSQClient`] **only**:
 //! ```toml
 //! [dependencies]
@@ -28,7 +28,7 @@
 //! [dependencies]
 //! msq = { version = "0.2", default-features = false, features = ["non-async"] }
 //! ```
-//! 
+//!
 //! # Quick Start
 //! The following example covers the primary functionalities of this library
 //! and should be quick on understanding how to use the library.
@@ -45,9 +45,6 @@
 //!
 //!     // Connect to the master server
 //!     client.connect("hl2master.steampowered.com:27011").await?;
-//!
-//!     // Maximum amount of servers we wanted to query
-//!     client.max_servers_on_query(256);
 //!
 //!     let servers = client
 //!         .query(Region::Europe,  // Restrict query to Europe region
@@ -80,7 +77,6 @@
 //! fn main() -> Result<()> {
 //!     let mut client = MSQClientBlock::new()?;
 //!     client.connect("hl2master.steampowered.com:27011")?;
-//!     client.max_servers_on_query(256);
 //!
 //!     let servers = client
 //!         .query(Region::Europe,  // Restrict query to Europe region
@@ -95,22 +91,12 @@
 //! }
 //! ```
 
+mod client;
 mod filter;
-mod region;
 mod packet_ext;
+mod region;
 
-#[cfg(feature = "async")]
-mod client_async;
-
-#[cfg(feature = "non-async")]
-mod client_blocking;
-
+pub use crate::client::Address;
+pub use crate::client::MSQClient;
 pub use crate::filter::Filter;
 pub use crate::region::Region;
-
-#[cfg(feature = "async")]
-pub use crate::client_async::MSQClient;
-
-#[cfg(feature = "non-async")]
-pub use crate::client_blocking::MSQClientBlock;
-

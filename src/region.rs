@@ -1,4 +1,4 @@
-use std::io::{Result, Error, ErrorKind};
+use std::io::{Error, ErrorKind, Result};
 
 /// Region enum to restrict the servers region the query searches for
 ///
@@ -16,7 +16,7 @@ use std::io::{Result, Error, ErrorKind};
 /// | `Region::Australia`    | Australia         | 0x05 |
 /// | `Region::MiddleEast`   | Middle East       | 0x06 |
 /// | `Region::Africa`       | Africa            | 0x07 |
-/// | `Region::All`          | Rest of the world | 0xFF |
+/// | `Region::All`          | Everyone | 0xFF |
 ///
 #[derive(Debug, PartialEq)]
 pub enum Region {
@@ -28,7 +28,7 @@ pub enum Region {
     Australia,
     MiddleEast,
     Africa,
-    All, // Rest of the world
+    All,
 }
 
 impl Region {

@@ -1,10 +1,13 @@
 use crate::filter::Filter;
 use crate::region::Region;
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crate::packet_ext::{ReadPacketExt, WritePacketExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use tokio::time::sleep;
 use std::io::{Cursor, Error, ErrorKind, Result};
+use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc::Sender;
 
 /// The primary MSQ client driver (async)
 ///
@@ -23,7 +26,6 @@ use tokio::net::UdpSocket;
 /// async fn main() -> Result<()> {
 ///     let mut client = MSQClient::new().await?;
 ///     client.connect("hl2master.steampowered.com:27011").await?;
-///     client.max_servers_on_query(256);
 ///
 ///     let servers = client
 ///         .query(Region::Europe,  // Restrict query to Europe region
@@ -39,17 +41,28 @@ use tokio::net::UdpSocket;
 /// ```
 pub struct MSQClient {
     sock: UdpSocket,
-    max_servers: usize,
 }
+
+#[derive(PartialEq, Default, Clone)]
+pub struct Address {
+    pub a: u8,
+    pub b: u8,
+    pub c: u8,
+    pub d: u8,
+}
+
+const EMPTY_ADRESS: Address = Address {
+    a: 0,
+    b: 0,
+    c: 0,
+    d: 0,
+};
 
 impl MSQClient {
     /// Create a new MSQClient variable and binds the UDP socket to `0.0.0.0:0`
     pub async fn new() -> Result<MSQClient> {
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
-        Ok(MSQClient {
-            sock: sock,
-            max_servers: 64,
-        })
+        Ok(MSQClient { sock })
     }
 
     /// Connect the client to the given master server address/hostname
@@ -79,9 +92,14 @@ impl MSQClient {
     /// # Arguments
     /// * `region_code` - Region code in u8 (`0x00 - 0x07 / 0xFF`)
     /// * `filter_str` - Filter in plain string (EX: `\\appid\\240\\map\\de_dust2`)
-    pub async fn query_raw(&mut self, region_code: u8, filter_str: &str) -> Result<Vec<String>> {
-        self.send(region_code, filter_str, "0.0.0.0:0").await?; // First Packet
-        Ok(self.recv(region_code, filter_str).await?)
+    pub async fn query_raw(
+        &mut self,
+        region_code: u8,
+        filter_str: &str,
+        sender: Sender<(Address, u16)>,
+    ) -> Result<()> {
+        self.send(region_code, filter_str, EMPTY_ADRESS, 0).await?; // First Packet
+        self.recv(region_code, filter_str, sender).await
     }
 
     /// Query with specified Region and Filter
@@ -91,95 +109,78 @@ impl MSQClient {
     /// # Arguments
     /// * `region` - [`Region`] enum (`Region::USEast` - `Region::Africa` / `Region::All`)
     /// * `filter` - [`Filter`] builder (EX: `Filter::new().appid(240).map("de_dust2")`)
-    pub async fn query(&mut self, region: Region, filter: Filter) -> Result<Vec<String>> {
-        Ok(self.query_raw(region.as_u8(), &filter.as_string()).await?)
+    pub async fn query(
+        &mut self,
+        region: Region,
+        filter: Filter,
+        sender: Sender<(Address, u16)>,
+    ) -> Result<()> {
+        self.query_raw(region.as_u8(), &filter.as_string(), sender)
+            .await
     }
 
-    /// Do a single query in one function
-    ///
-    /// # Arguments
-    /// * `master_server` - The address of the master server to fetch the query from
-    /// * `max_servers` - The maximum amount of servers to query
-    /// * `region` - [`Region`] enum (`Region::USEast` - `Region::Africa` / `Region::All`)
-    /// * `filter` - [`Filter`] builder (EX: `Filter::new().appid(240).map("de_dust2")`)
-    ///
-    /// # Example
-    /// ```
-    /// use msq::{MSQClient, Region, Filter};
-    /// use std::io::Result;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<()> {
-    ///     let servers_list = MSQClient::single_query(
-    ///             "hl2master.steampowered.com:27011",
-    ///             256,
-    ///             Region::Europe,
-    ///             Filter::new().appid(240)).await?;
-    ///     Ok(())
-    /// }
-    /// ```
-    pub async fn single_query(master_server: &str, max_servers: usize, region: Region, filter: Filter) -> Result<Vec<String>> {
-        let mut client = Self::new().await?;
-        client.connect(master_server).await?;
-        client.max_servers_on_query(max_servers);
-        client.query(region, filter).await
-    }
-
-    async fn send(&mut self, region_code: u8, filter_str: &str, address: &str) -> Result<()> {
-        let mut cursor: Cursor<Vec<u8>> = Cursor::new(vec![]);
+    async fn send(
+        &mut self,
+        region_code: u8,
+        filter_str: &str,
+        address: Address,
+        port: u16,
+    ) -> Result<()> {
+        let mut cursor: Cursor<Vec<u8>> = Cursor::new(Vec::default());
         cursor.write_u8(0x31)?;
         cursor.write_u8(region_code)?;
-        cursor.write_cstring(address)?;
+        cursor.write_cstring(&format!(
+            "{}.{}.{}.{}:{}",
+            address.a, address.b, address.c, address.d, port
+        ))?;
         cursor.write_cstring(filter_str)?;
         self.sock.send(cursor.get_ref()).await?;
         Ok(())
     }
 
-    async fn recv(&mut self, region_code: u8, filter_str: &str) -> Result<Vec<String>> {
+    async fn recv(
+        &mut self,
+        region_code: u8,
+        filter_str: &str,
+        sender: Sender<(Address, u16)>,
+    ) -> Result<()> {
         let mut buf: [u8; 2048] = [0x00; 2048];
-        let mut servers: Vec<String> = vec![];
+        let mut last_address: Address = Address::default();
+        let mut last_port: u16 = 0;
         let mut end_of_list = false;
         while !end_of_list {
             let len = self.sock.recv(&mut buf).await?;
             let mut cursor = Cursor::new(buf[..len].to_vec());
+            if cursor.read_u8_veccheck(&[0xFF, 0xFF, 0xFF, 0xFF, 0x66, 0x0A])? {
+                while let Ok(a) = cursor.read_u8() {
+                    let address = Address {
+                        a,
+                        b: cursor.read_u8()?,
+                        c: cursor.read_u8()?,
+                        d: cursor.read_u8()?,
+                    };
 
-            if cursor.read_u8_veccheck(&vec![0xFF, 0xFF, 0xFF, 0xFF, 0x66, 0x0A])? {
-                let end = cursor.get_ref().len() as u64;
-                while cursor.position() < end {
-                    let mut addr: [u8; 4] = [0; 4];
-                    for i in 0..=3 {
-                        addr[i] = cursor.read_u8()?;
-                    }
-                    let port = cursor.read_u16::<BigEndian>()?;
-                    let addr_str =
-                        format!("{}.{}.{}.{}:{}", addr[0], addr[1], addr[2], addr[3], port);
-
-                    // If end of IP list
-                    if servers.len() >= self.max_servers || addr_str == "0.0.0.0:0" {
+                    if address == EMPTY_ADRESS {
                         end_of_list = true;
                         break;
                     }
 
-                    servers.push(addr_str);
+                    let port = cursor.read_u16::<BigEndian>()?;
+                    sender.send((address.clone(), port)).await.unwrap();
+
+                    last_address = address;
+                    last_port = port;
                 }
             } else {
                 return Err(Error::new(ErrorKind::Other, "Mismatched starting sequence"));
             }
 
-            if !end_of_list && servers.len() > 0 {
-                self.send(region_code, filter_str, &servers.last().unwrap())
-                    .await?;
-            }
+            sleep(Duration::from_secs(6)).await;
+
+            self.send(region_code, filter_str, last_address.clone(), last_port)
+                .await?;
         }
 
-        Ok(servers)
-    }
-
-    /// Set maximum amount of servers in a given query
-    ///
-    /// # Arguments
-    /// * `max_servers` - Maximum amount of servers in a query
-    pub fn max_servers_on_query(&mut self, max_servers: usize) {
-        self.max_servers = max_servers;
+        Ok(())
     }
 }

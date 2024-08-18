@@ -2,27 +2,11 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 use std::io::{Cursor, Result};
 
 pub trait ReadPacketExt: ReadBytesExt {
-    fn read_cstring(&mut self) -> Result<String>;
-    fn read_u8_veccheck(&mut self, src: &Vec<u8>) -> Result<bool>;
+    fn read_u8_veccheck(&mut self, src: &[u8]) -> Result<bool>;
 }
 
 impl ReadPacketExt for Cursor<Vec<u8>> {
-    fn read_cstring(&mut self) -> Result<String> {
-        let end = self.get_ref().len() as u64;
-        let mut svec = Vec::with_capacity(256);
-        while self.position() < end {
-            let ch = self.read_u8()?;
-            if ch == 0 {
-                break;
-            } else {
-                svec.push(ch);
-            }
-        }
-
-        Ok(String::from_utf8_lossy(&svec[..]).into_owned())
-    }
-
-    fn read_u8_veccheck(&mut self, cmp: &Vec<u8>) -> Result<bool> {
+    fn read_u8_veccheck(&mut self, cmp: &[u8]) -> Result<bool> {
         for cch in cmp {
             let sch = self.read_u8()?;
             if *cch != sch {

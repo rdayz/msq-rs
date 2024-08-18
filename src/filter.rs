@@ -27,8 +27,8 @@ enum FilterPropVal {
 }
 
 impl FilterPropVal {
-    fn from_special(spec: &Vec<FilterProp>) -> FilterPropVal {
-        Self::Special(spec.clone())
+    fn from_special(spec: &[FilterProp]) -> FilterPropVal {
+        Self::Special(spec.to_owned())
     }
 
     fn from_tags(tags: &Vec<&str>) -> FilterPropVal {
@@ -42,7 +42,7 @@ impl FilterPropVal {
     }
 
     fn as_str(&self) -> String {
-        match &*self {
+        match self {
             Self::Special(filterprops) => {
                 let mut sstr = String::from("");
 
@@ -62,7 +62,7 @@ impl FilterPropVal {
             Self::Tags(tags) => {
                 let mut tags_str = String::from("");
                 for tag in tags {
-                    tags_str += &tag;
+                    tags_str += tag;
                     tags_str += ",";
                 }
                 tags_str.pop();
@@ -82,7 +82,7 @@ impl FilterProp {
     fn new(name: &str, value: FilterPropVal) -> FilterProp {
         FilterProp {
             name: String::from(name),
-            value: value,
+            value,
         }
     }
 
@@ -185,10 +185,10 @@ impl Filter {
 
     // Generic filter: Vector of strings
     fn vecstr(self, name: &str, tags: &Vec<&str>) -> Filter {
-        if tags.len() > 0 {
-            self.push(name, FilterPropVal::from_tags(tags))
-        } else {
+        if tags.is_empty() {
             self
+        } else {
+            self.push(name, FilterPropVal::from_tags(tags))
         }
     }
 
